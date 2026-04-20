@@ -5,7 +5,7 @@ import os
 
 import gradio as gr
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from src.predictor import Predictor
 
@@ -17,89 +17,106 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-
-def parse_points(raw_text: str, label_mode: str) -> tuple[list[list[int]], list[int]]:
-    """Parse a coordinate string into points and labels.
-
-    Args:
-        raw_text: Semicolon-separated "x,y" pairs (e.g., "100,200;300,400").
-        label_mode: Either "foreground" or "background"; applied to all points.
-
-    Returns:
-        A tuple of (points, labels).
-    """
-    points: list[list[int]] = []
-    labels: list[int] = []
-    label_value = 1 if label_mode == "foreground" else 0
-
-    if not raw_text or not raw_text.strip():
-        return points, labels
-
-    for pair in raw_text.split(";"):
-        pair = pair.strip()
-        if not pair:
-            continue
-        parts = pair.split(",")
-        if len(parts) != 2:
-            logger.warning("Skipping malformed coordinate pair: '%s'", pair)
-            continue
-        x, y = int(parts[0].strip()), int(parts[1].strip())
-        points.append([x, y])
-        labels.append(label_value)
-
-    return points, labels
+POINT_RADIUS = 6
+FG_COLOR = (50, 220, 50)
+BG_COLOR = (220, 50, 50)
 
 
-def segment(
-    image: Image.Image | None, coords_text: str, label_mode: str
-) -> Image.Image | None:
-    """Run segmentation on the uploaded image.
+def _draw_points(
+    image: Image.Image,
+    points: list[list[int]],
+    labels: list[int],
+) -> Image.Image:
+    canvas = image.copy()
+    draw = ImageDraw.Draw(canvas)
+    for (x, y), label in zip(points, labels):
+        color = FG_COLOR if label == 1 else BG_COLOR
+        r = POINT_RADIUS
+        draw.ellipse([x - r, y - r, x + r, y + r], fill=color, outline="white", width=2)
+    return canvas
 
-    Args:
-        image: Uploaded PIL image (or None).
-        coords_text: Raw coordinate string from the textbox.
-        label_mode: "foreground" or "background".
 
-    Returns:
-        Mask-overlaid image, or None if no image was provided.
-    """
-    if image is None:
-        return None
+def on_upload(
+    image: Image.Image | None,
+) -> tuple[Image.Image | None, list, list, None]:
+    return image, [], [], None
 
-    points, labels = parse_points(coords_text, label_mode)
-    return Predictor.predict(image, points, labels)
+
+def on_click(
+    orig: Image.Image | None,
+    points: list[list[int]],
+    labels: list[int],
+    label_mode: str,
+    evt: gr.SelectData,
+) -> tuple[list, list, Image.Image | None, Image.Image | None]:
+    if orig is None:
+        return points, labels, None, None
+
+    x, y = int(evt.index[0]), int(evt.index[1])
+    label = 1 if label_mode == "foreground" else 0
+    new_points = points + [[x, y]]
+    new_labels = labels + [label]
+
+    annotated = _draw_points(orig, new_points, new_labels)
+    result = Predictor.predict(orig, new_points, new_labels)
+    return new_points, new_labels, annotated, result
+
+
+def on_clear(
+    orig: Image.Image | None,
+) -> tuple[list, list, Image.Image | None, None]:
+    return [], [], orig, None
 
 
 def build_app() -> gr.Blocks:
     """Construct the Gradio Blocks UI."""
-    with gr.Blocks(title="SAM - Segment Anything") as demo:
+    with gr.Blocks(title="SAM - Segment Anything", theme=gr.themes.Soft()) as demo:
         gr.Markdown("# SAM - Segment Anything")
         gr.Markdown(
-            "Upload an image and optionally specify click coordinates "
-            "to segment objects. Coordinates use the format `x1,y1;x2,y2`."
+            "1. 画像をアップロード\n"
+            "2. セグメントしたい場所をクリック（複数可）\n"
+            "- 🟢 **Foreground** — 含める領域\n"
+            "- 🔴 **Background** — 除外する領域"
         )
+
+        orig_state = gr.State(None)
+        points_state = gr.State([])
+        labels_state = gr.State([])
 
         with gr.Row():
             with gr.Column():
-                image_input = gr.Image(type="pil", label="Input Image")
-                coords_input = gr.Textbox(
-                    label="Coordinates (optional)",
-                    placeholder="x1,y1;x2,y2",
+                image_input = gr.Image(
+                    type="pil",
+                    label="クリックして点を追加",
+                    interactive=True,
                 )
-                label_radio = gr.Radio(
-                    choices=["foreground", "background"],
-                    value="foreground",
-                    label="Point Label",
-                )
-                run_button = gr.Button("Segment", variant="primary")
+                with gr.Row():
+                    label_radio = gr.Radio(
+                        choices=["foreground", "background"],
+                        value="foreground",
+                        label="点の種類",
+                    )
+                    clear_btn = gr.Button("🗑 クリア", size="sm")
 
             with gr.Column():
-                output_image = gr.Image(type="pil", label="Segmentation Result")
+                output_image = gr.Image(type="pil", label="セグメンテーション結果")
 
-        run_button.click(
-            fn=segment,
-            inputs=[image_input, coords_input, label_radio],
-            outputs=output_image,
+        image_input.upload(
+            fn=on_upload,
+            inputs=[image_input],
+            outputs=[orig_state, points_state, labels_state, output_image],
+        )
+
+        image_input.select(
+            fn=on_click,
+            inputs=[orig_state, points_state, labels_state, label_radio],
+            outputs=[points_state, labels_state, image_input, output_image],
+        )
+
+        clear_btn.click(
+            fn=on_clear,
+            inputs=[orig_state],
+            outputs=[points_state, labels_state, image_input, output_image],
         )
 
     return demo
