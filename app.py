@@ -105,17 +105,10 @@ def build_app() -> gr.Blocks:
     return demo
 
 
-def main() -> None:
-    """Entry point: initialize the predictor and launch the Gradio app."""
-    logger.info("Initializing Predictor on '%s'...", DEFAULT_DEVICE)
-    Predictor.initialize(device=DEFAULT_DEVICE)
-
-    port = int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
-    logger.info("Launching Gradio app on port %d...", port)
-
-    app = build_app()
-    app.launch(server_name="0.0.0.0", server_port=port)
-
+# Module-level init and demo for HF Spaces
+Predictor.initialize(device=DEFAULT_DEVICE)
+demo = build_app()
 
 if __name__ == "__main__":
-    main()
+    port = int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
+    demo.launch(server_name="0.0.0.0", server_port=port)
