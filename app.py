@@ -48,9 +48,9 @@ def on_click(
     labels: list[int],
     label_mode: str,
     evt: gr.SelectData,
-) -> tuple[list, list, Image.Image | None, Image.Image | None]:
+) -> tuple[list, list, Image.Image | None]:
     if orig is None:
-        return points, labels, None, None
+        return points, labels, None
 
     x, y = int(evt.index[0]), int(evt.index[1])
     label = 1 if label_mode == "foreground" else 0
@@ -58,8 +58,17 @@ def on_click(
     new_labels = labels + [label]
 
     annotated = _draw_points(orig, new_points, new_labels)
-    result = Predictor.predict(orig, new_points, new_labels)
-    return new_points, new_labels, annotated, result
+    return new_points, new_labels, annotated
+
+
+def on_segment(
+    orig: Image.Image | None,
+    points: list[list[int]],
+    labels: list[int],
+) -> Image.Image | None:
+    if orig is None:
+        return None
+    return Predictor.predict(orig, points, labels)
 
 
 def on_clear(
@@ -75,6 +84,7 @@ def build_app() -> gr.Blocks:
         gr.Markdown(
             "1. 画像をアップロード\n"
             "2. セグメントしたい場所をクリック（複数可）\n"
+            "3. **セグメント実行** ボタンを押す\n"
             "- 🟢 **Foreground** — 含める領域\n"
             "- 🔴 **Background** — 除外する領域"
         )
@@ -97,6 +107,7 @@ def build_app() -> gr.Blocks:
                         label="点の種類",
                     )
                     clear_btn = gr.Button("🗑 クリア", size="sm")
+                segment_btn = gr.Button("▶ セグメント実行", variant="primary")
 
             with gr.Column():
                 output_image = gr.Image(type="pil", label="セグメンテーション結果")
@@ -110,7 +121,13 @@ def build_app() -> gr.Blocks:
         image_input.select(
             fn=on_click,
             inputs=[orig_state, points_state, labels_state, label_radio],
-            outputs=[points_state, labels_state, image_input, output_image],
+            outputs=[points_state, labels_state, image_input],
+        )
+
+        segment_btn.click(
+            fn=on_segment,
+            inputs=[orig_state, points_state, labels_state],
+            outputs=[output_image],
         )
 
         clear_btn.click(
